@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intrinsics Catalog — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#types"><span class="num">01</span>Types &amp; naming</a></li>
+      <li><a href="#memory"><span class="num">02</span>Load / store</a></li>
+      <li><a href="#constants"><span class="num">03</span>Constants</a></li>
+      <li><a href="#arith"><span class="num">04</span>Arithmetic</a></li>
+      <li><a href="#horizontal"><span class="num">05</span>Horizontal</a></li>
+      <li><a href="#mask"><span class="num">06</span>Compare / blend / abs</a></li>
+      <li><a href="#int"><span class="num">07</span>Integer</a></li>
+      <li><a href="#by-file"><span class="num">08</span>By exercise</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Catalog <span class="brace">{</span> Every intrinsic in this repo <span class="brace">}</span></h1>
+      <p class="subtitle">Full list of AVX2 and NEON intrinsics used under <code class="inline">src/</code>, with meaning, lane width, and which exercise calls them. Pair with the quick map in <a href="Theory_CodeRef.html">Code Ref</a>.</p>
+    </header>
+
+    <section id="types">
+      <div class="section-head"><span class="idx">01</span><h2>Types &amp; naming</h2></div>
+      <table>
+        <tr><th>Type</th><th>Platform</th><th>Contents</th></tr>
+        <tr><td><code class="inline">__m256</code></td><td>AVX2</td><td>8 × <code class="inline">float</code> (256-bit)</td></tr>
+        <tr><td><code class="inline">__m128</code></td><td>SSE / half of AVX</td><td>4 × <code class="inline">float</code> (128-bit)</td></tr>
+        <tr><td><code class="inline">__m256i</code></td><td>AVX2</td><td>8 × <code class="inline">int32</code> (or other int layouts)</td></tr>
+        <tr><td><code class="inline">float32x4_t</code></td><td>NEON</td><td>4 × <code class="inline">float</code></td></tr>
+        <tr><td><code class="inline">float32x2_t</code></td><td>NEON</td><td>2 × <code class="inline">float</code> (narrow)</td></tr>
+        <tr><td><code class="inline">int32x4_t</code></td><td>NEON</td><td>4 × <code class="inline">int32</code></td></tr>
+        <tr><td><code class="inline">uint32x4_t</code></td><td>NEON</td><td>4 × mask / uint lanes</td></tr>
+      </table>
+      <h3>Name patterns</h3>
+      <ul>
+        <li><strong>AVX:</strong> <code class="inline">_mm256_*</code> = 256-bit; <code class="inline">_mm_*</code> = 128-bit; suffix <code class="inline">_ps</code> = packed single (float); <code class="inline">_epi32</code> = 32-bit integer lanes; <code class="inline">_si256</code> = opaque integer vector.</li>
+        <li><strong>NEON:</strong> <code class="inline">v…q_…</code> — <code class="inline">q</code> = 128-bit (quad); <code class="inline">f32</code> / <code class="inline">s32</code> = float / signed int32; <code class="inline">vld1</code> / <code class="inline">vst1</code> = load/store one vector.</li>
+      </ul>
+      <div class="card">
+        <span class="card-label">Headers</span>
+        <p>x86: <code class="inline">&lt;immintrin.h&gt;</code> via <code class="inline">simd_detect.hpp</code>. ARM: <code class="inline">&lt;arm_neon.h&gt;</code>. Include the detector header; do not scatter ISA includes in every file.</p>
+      </div>
+    </section>
+
+    <section id="memory">
+      <div class="section-head"><span class="idx">02</span><h2>Load / store</h2></div>
+
+      <h3><code class="inline">_mm256_loadu_ps</code> / <code class="inline">vld1q_f32</code></h3>
+      <p><strong>Load</strong> 8 (AVX) or 4 (NEON) floats from a pointer into a vector register. The <code class="inline">u</code> in <code class="inline">loadu</code> means <strong>unaligned</strong> — safe for <code class="inline">std::vector::data()</code>. Used in every float exercise.</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>01_vecadd</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">__m256 va = _mm256_loadu_ps(a + i);
+float32x4_t va = vld1q_f32(a + i);</code></pre>
+      </div>
+
+      <h3><code class="inline">_mm256_storeu_ps</code> / <code class="inline">vst1q_f32</code></h3>
+      <p><strong>Store</strong> a vector back to memory (unaligned). Inverse of load. Writes <code class="inline">step</code> consecutive floats starting at <code class="inline">out + i</code>.</p>
+
+      <h3>Aligned variants (not used in kernels; see <code class="inline">aligned_alloc.hpp</code>)</h3>
+      <p><code class="inline">_mm256_load_ps</code> / <code class="inline">_mm256_store_ps</code> require a 32-byte-aligned address. Faster on some x86 µarchs; undefined if misaligned. This lab sticks to <code class="inline">loadu</code>/<code class="inline">storeu</code> for simplicity.</p>
+
+      <h3>Integer memory</h3>
+      <table>
+        <tr><th>Intrinsic</th><th>Role</th><th>File</th></tr>
+        <tr><td><code class="inline">_mm256_loadu_si256</code></td><td>Load 32 bytes as <code class="inline">__m256i</code></td><td><code class="inline">06</code></td></tr>
+        <tr><td><code class="inline">_mm256_storeu_si256</code></td><td>Store <code class="inline">__m256i</code></td><td><code class="inline">06</code></td></tr>
+        <tr><td><code class="inline">vld1q_s32</code> / <code class="inline">vst1q_s32</code></td><td>Load/store 4 × int32</td><td><code class="inline">06</code></td></tr>
+      </table>
+      <p class="dim">Integer loads take <code class="inline">__m256i*</code>; code uses <code class="inline">reinterpret_cast</code> from <code class="inline">int32_t*</code>.</p>
+    </section>
+
+    <section id="constants">
+      <div class="section-head"><span class="idx">03</span><h2>Constants &amp; broadcast</h2></div>
+
+      <h3><code class="inline">_mm256_setzero_ps</code> / <code class="inline">vdupq_n_f32(0)</code></h3>
+      <p>All lanes = 0. Accumulators for dot product and reduce-sum start here (<code class="inline">02</code>, <code class="inline">07</code>). Also used as the “false” blend input in AVX threshold flags (<code class="inline">05</code>).</p>
+
+      <h3><code class="inline">_mm256_set1_ps(x)</code> / <code class="inline">vdupq_n_f32(x)</code></h3>
+      <p><strong>Broadcast</strong> scalar <code class="inline">x</code> into every lane: <code class="inline">[x,x,x,…]</code>. Used for α in AXPY, clip bounds, threshold, sign-bit mask (<code class="inline">-0.0f</code>), and init of min-accumulator to <code class="inline">FLT_MAX</code>.</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>03_fma_scale</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">const __m256 va = _mm256_set1_ps(alpha);
+const float32x4_t va = vdupq_n_f32(alpha);</code></pre>
+      </div>
+    </section>
+
+    <section id="arith">
+      <div class="section-head"><span class="idx">04</span><h2>Arithmetic (vertical)</h2></div>
+      <p>Vertical = lane <em>i</em> of the result depends only on lane <em>i</em> of the inputs.</p>
+
+      <h3><code class="inline">_mm256_add_ps</code> / <code class="inline">vaddq_f32</code></h3>
+      <p>Lane-wise <code class="inline">a + b</code>. Core of <code class="inline">01_vecadd</code> and the accumulate step in <code class="inline">07_reduce_sum</code>.</p>
+
+      <h3><code class="inline">_mm256_fmadd_ps(a,b,c)</code> / <code class="inline">vfmaq_f32(c,a,b)</code></h3>
+      <p><strong>Fused multiply-add:</strong> compute <code class="inline">a*b + c</code> with one rounding. Watch argument order:</p>
+      <table>
+        <tr><th></th><th>Computes</th></tr>
+        <tr><td>AVX <code class="inline">_mm256_fmadd_ps(a,b,c)</code></td><td><code class="inline">a*b + c</code></td></tr>
+        <tr><td>NEON <code class="inline">vfmaq_f32(c,a,b)</code></td><td><code class="inline">c + a*b</code> (accumulator first)</td></tr>
+      </table>
+      <p>Used in <code class="inline">02</code> (dot: <code class="inline">acc += a*b</code>) and <code class="inline">03</code> (AXPY: <code class="inline">y += α*x</code>). Needs <code class="inline">-mfma</code> on x86 (CMake sets this).</p>
+
+      <h3><code class="inline">_mm256_min_ps</code> / <code class="inline">_mm256_max_ps</code> · <code class="inline">vminq_f32</code> / <code class="inline">vmaxq_f32</code></h3>
+      <p>Lane-wise min/max. Clip is <code class="inline">min(hi, max(lo, x))</code> with no branches (<code class="inline">04</code>). Also used to fold candidates in array-wide min.</p>
+
+      <h3>SSE helpers used inside AVX reductions</h3>
+      <p><code class="inline">_mm_add_ps</code>, <code class="inline">_mm_min_ps</code> — same ops on <code class="inline">__m128</code> after splitting a 256-bit register in half.</p>
+    </section>
+
+    <section id="horizontal">
+      <div class="section-head"><span class="idx">05</span><h2>Horizontal ops (cross-lane)</h2></div>
+      <p>After a vertical loop you often have 8 (or 4) partial results in one register. Horizontal ops <strong>fold lanes together</strong> into a scalar.</p>
+
+      <h3>AVX sum fold (<code class="inline">02</code>, <code class="inline">07</code>)</h3>
+      <table>
+        <tr><th>Intrinsic</th><th>What it does</th></tr>
+        <tr><td><code class="inline">_mm256_castps256_ps128(v)</code></td><td>Reinterpret: low 128 bits as <code class="inline">__m128</code> (no instruction)</td></tr>
+        <tr><td><code class="inline">_mm256_extractf128_ps(v, 1)</code></td><td>High 128 bits → <code class="inline">__m128</code></td></tr>
+        <tr><td><code class="inline">_mm_add_ps(lo, hi)</code></td><td>Add the two halves → 4 partial sums</td></tr>
+        <tr><td><code class="inline">_mm_hadd_ps(x, x)</code> (×2)</td><td>Pairwise horizontal add; after two rounds, lane 0 holds the total</td></tr>
+        <tr><td><code class="inline">_mm_cvtss_f32(x)</code></td><td>Extract lane 0 as a C <code class="inline">float</code></td></tr>
+      </table>
+
+      <h3>AVX min fold (<code class="inline">04</code>)</h3>
+      <p>Same split into <code class="inline">lo</code>/<code class="inline">hi</code>, then <code class="inline">_mm_min_ps</code> plus <code class="inline">_mm_shuffle_ps</code> to pairwise-min until one scalar remains, then <code class="inline">_mm_cvtss_f32</code>.</p>
+      <p><code class="inline">_MM_SHUFFLE(2,3,0,1)</code> / <code class="inline">(1,0,3,2)</code> pick lane permutations so each <code class="inline">min</code> compares different pairs. Implemented with <code class="inline">_mm_shuffle_ps(m, m, imm)</code>.</p>
+
+      <h3>NEON fold</h3>
+      <table>
+        <tr><th>Intrinsic</th><th>What it does</th></tr>
+        <tr><td><code class="inline">vget_low_f32</code> / <code class="inline">vget_high_f32</code></td><td>Split <code class="inline">float32x4_t</code> into two <code class="inline">float32x2_t</code></td></tr>
+        <tr><td><code class="inline">vadd_f32</code></td><td>Add the two doubles (2-wide)</td></tr>
+        <tr><td><code class="inline">vpadd_f32</code></td><td>Pairwise add within a 2-wide vector</td></tr>
+        <tr><td><code class="inline">vpmin_f32</code></td><td>Pairwise min (for array min)</td></tr>
+        <tr><td><code class="inline">vget_lane_f32(v, 0)</code></td><td>Extract one lane as <code class="inline">float</code></td></tr>
+        <tr><td><code class="inline">vmin_f32</code></td><td>2-wide lane min (used before <code class="inline">vpmin</code>)</td></tr>
+      </table>
+    </section>
+
+    <section id="mask">
+      <div class="section-head"><span class="idx">06</span><h2>Compare, blend, abs</h2></div>
+
+      <h3><code class="inline">_mm256_cmp_ps(a, b, _CMP_GT_OQ)</code> / <code class="inline">vcgtq_f32(a, b)</code></h3>
+      <p>Lane-wise “greater than.” AVX returns a float vector whose lanes are all-1-bits or all-0-bits. NEON returns <code class="inline">uint32x4_t</code> masks. <code class="inline">_CMP_GT_OQ</code> = ordered quiet compare (NaNs compare false). File: <code class="inline">05</code>.</p>
+
+      <h3><code class="inline">_mm256_blendv_ps(f, t, mask)</code> / <code class="inline">vbslq_f32(mask, t, f)</code></h3>
+      <p>Per lane: if mask true, take <code class="inline">t</code>, else <code class="inline">f</code>. Argument order differs:</p>
+      <ul>
+        <li>AVX: <code class="inline">blendv(false_val, true_val, mask)</code></li>
+        <li>NEON: <code class="inline">vbsl(mask, true_val, false_val)</code></li>
+      </ul>
+      <p>Builds 0/1 threshold flags without an <code class="inline">if</code> per element.</p>
+
+      <h3><code class="inline">_mm256_andnot_ps(sign, v)</code> / <code class="inline">vabsq_f32(v)</code></h3>
+      <p>Absolute value. AVX clears the sign bit: <code class="inline">andnot(sign_mask, v)</code> with <code class="inline">sign_mask = set1(-0.0f)</code> (bit <code class="inline">0x80000000</code>). NEON has a dedicated <code class="inline">vabsq_f32</code>.</p>
+    </section>
+
+    <section id="int">
+      <div class="section-head"><span class="idx">07</span><h2>Integer arithmetic</h2></div>
+      <h3><code class="inline">_mm256_add_epi32</code> / <code class="inline">vaddq_s32</code></h3>
+      <p>Lane-wise 32-bit integer add (8 lanes AVX, 4 NEON). Exact integers — no float rounding. File: <code class="inline">06_int32_add</code>. Signed overflow in C++ is UB if you rely on wrap in portable code; prefer defined modular types when wrap matters.</p>
+    </section>
+
+    <section id="by-file">
+      <div class="section-head"><span class="idx">08</span><h2>Intrinsics by exercise</h2></div>
+      <table>
+        <tr><th>File</th><th>Intrinsics (concept)</th></tr>
+        <tr><td><code class="inline">01_vecadd</code></td><td>load, add, store</td></tr>
+        <tr><td><code class="inline">02_dot_product</code></td><td>load, FMA accumulate, horizontal sum fold</td></tr>
+        <tr><td><code class="inline">03_fma_scale</code></td><td>broadcast, load, FMA, store (in-place)</td></tr>
+        <tr><td><code class="inline">04_min_max</code></td><td>broadcast, min/max, store; horizontal min fold</td></tr>
+        <tr><td><code class="inline">05_blend_branchless</code></td><td>compare, blend; abs (andnot / vabs)</td></tr>
+        <tr><td><code class="inline">06_int32_add</code></td><td>int load/store, add_epi32 / vaddq_s32</td></tr>
+        <tr><td><code class="inline">07_reduce_sum</code></td><td>load, add accumulate, horizontal sum fold</td></tr>
+      </table>
+      <p class="dim">Quick AVX↔NEON pairs: <a href="Theory_CodeRef.html">Code Ref</a>. Loop pattern &amp; remainder: <a href="Theory_Intrinsics.html">Intrinsics &amp; Loop Patterns</a>.</p>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a> · <a href="Theory_CodeRef.html">Code Ref</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>

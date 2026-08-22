@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reductions &amp; FMA — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#dot"><span class="num">01</span>Dot product</a></li>
+      <li><a href="#horizontal"><span class="num">02</span>Horizontal reduction</a></li>
+      <li><a href="#fma"><span class="num">03</span>FMA &amp; AXPY</a></li>
+      <li><a href="#float-error"><span class="num">04</span>Float ordering</a></li>
+      <li><a href="#minmax"><span class="num">05</span>Min / max / clip</a></li>
+      <li><a href="#sum"><span class="num">06</span>Reduce sum</a></li>
+      <li><a href="#checklist"><span class="num">07</span>Revision checklist</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Reductions <span class="brace">{</span> FMA &amp; numerics <span class="brace">}</span></h1>
+      <p class="subtitle">Exercises <code class="inline">02</code>, <code class="inline">03</code>, <code class="inline">04</code>, and <code class="inline">07</code> — accumulating across lanes and elements, fused multiply-add, and float non-associativity.</p>
+    </header>
+
+    <section id="dot">
+      <div class="section-head"><span class="idx">01</span><h2>Dot product</h2></div>
+      <p>Compute Σ <code class="inline">a[i] * b[i]</code>. SIMD multiplies lane-wise and accumulates into a vector of partial sums — one running total per lane — then folds those lanes into a scalar.</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>AVX2 accumulate (src/02_dot_product.cpp)</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">__m256 acc = _mm256_setzero_ps();
+for (; i + 8 &lt;= n; i += 8) {
+    __m256 va = _mm256_loadu_ps(a + i);
+    __m256 vb = _mm256_loadu_ps(b + i);
+    acc = _mm256_fmadd_ps(va, vb, acc);  // acc += va * vb
+}
+float sum = hsum_avx(acc);               // fold 8 lanes → 1</code></pre>
+      </div>
+      <p>NEON: <code class="inline">vfmaq_f32(acc, va, vb)</code> — accumulator is the <em>first</em> argument. Quant uses: weights·returns, correlation numerators, similarity scores (<a href="Theory_Quant_Applications.html">Quant Applications</a>).</p>
+    </section>
+
+    <section id="horizontal">
+      <div class="section-head"><span class="idx">02</span><h2>Horizontal reduction</h2></div>
+      <p>After the main loop you hold 8 (AVX) or 4 (NEON) partial results. Horizontal ops fold them:</p>
+      <ul>
+        <li><strong>AVX sum:</strong> extract 128-bit halves → add → <code class="inline">hadd</code> twice → <code class="inline">cvtss</code> to scalar.</li>
+        <li><strong>NEON sum:</strong> low/high halves → add → pairwise add → extract lane 0.</li>
+        <li><strong>Min reduction:</strong> same split idea with <code class="inline">min</code> / <code class="inline">vpmin</code> (<code class="inline">04</code>).</li>
+      </ul>
+      <p class="dim">Step-by-step intrinsic list: <a href="Theory_Intrinsics_Catalog.html#horizontal">Catalog — Horizontal</a>.</p>
+    </section>
+
+    <section id="fma">
+      <div class="section-head"><span class="idx">03</span><h2>FMA — fused multiply-add</h2></div>
+      <p><code class="inline">fma(a, b, c)</code> computes <code class="inline">a * b + c</code> with a <strong>single rounding</strong>. Separate mul then add rounds twice. FMA is usually faster on hardware that has FMA units and slightly more accurate.</p>
+      <table>
+        <tr><th>Operation</th><th>AVX2</th><th>NEON</th></tr>
+        <tr><td>FMA</td><td><code class="inline">_mm256_fmadd_ps(a,b,c)</code></td><td><code class="inline">vfmaq_f32(c,a,b)</code></td></tr>
+        <tr><td>AXPY <code class="inline">y += αx</code></td><td><code class="inline">y = fmadd(α, x, y)</code></td><td><code class="inline">y = vfmaq(y, α, x)</code></td></tr>
+      </table>
+      <div class="card">
+        <span class="card-label">AXPY in-place</span>
+        <p><code class="inline">03_fma_scale</code> mutates <code class="inline">y</code>. Every timed run must restore <code class="inline">y</code> from <code class="inline">y_orig</code> or the buffer accumulates αx across iterations. Verify one clean AXPY before or after timing.</p>
+      </div>
+      <p>EWMA-style updates rewrite to the same FMA shape: <code class="inline">state += alpha * (sample - state)</code>.</p>
+    </section>
+
+    <section id="float-error">
+      <div class="section-head"><span class="idx">04</span><h2>Float ordering &amp; error</h2></div>
+      <p>Float addition is not associative. Serial scalar sums left-to-right; SIMD sums in parallel lanes then folds. At ~10M elements the totals can differ by ~1–2% relative on this lab’s data.</p>
+      <ul>
+        <li><strong>vecadd / clip / flags:</strong> element-wise — expect near-exact match (<code class="inline">verify_float_ranges</code> / exact).</li>
+        <li><strong>dot / sum:</strong> use <code class="inline">verify_scalar_close</code> with relative tolerance (~2%).</li>
+      </ul>
+      <div class="card warn">
+        <span class="card-label">Not a logic bug by itself</span>
+        <p>SIMD ≠ bit-identical to scalar for reductions. Match within tolerance, or accumulate in double / compensated sum when financial identity matters.</p>
+      </div>
+    </section>
+
+    <section id="minmax">
+      <div class="section-head"><span class="idx">05</span><h2>Min / max / clip</h2></div>
+      <p>Lane-wise min/max without branches:</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>clip to [lo, hi]</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">v = max(v, vlo);
+v = min(v, vhi);</code></pre>
+      </div>
+      <p>Array-wide min keeps a vector accumulator of per-lane minima, then horizontal-mins to one float. NaN behavior follows IEEE and the compare flavour; this lab uses finite test data.</p>
+    </section>
+
+    <section id="sum">
+      <div class="section-head"><span class="idx">06</span><h2>Reduce sum (<code class="inline">07</code>)</h2></div>
+      <p>Same pattern as dot product with an implicit multiply by 1: load chunks, <code class="inline">acc += v</code>, horizontal fold, scalar tail. Quant uses: batch means (sum/n), total PnL, exposure checks. Pair with Kahan/compensated summation when long float sums must stay tight.</p>
+    </section>
+
+    <section id="checklist">
+      <div class="section-head"><span class="idx">07</span><h2>Revision checklist</h2></div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> AVX vs NEON FMA argument order?</div>
+        <div class="a"><p>AVX <code class="inline">fmadd(a,b,c) → a*b+c</code>. NEON <code class="inline">vfmaq(c,a,b) → c+a*b</code> (accumulator first).</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why can SIMD dot ≠ scalar dot?</div>
+        <div class="a"><p>Float add is not associative. Parallel lane sums + fold reorder operations → small relative error at large <code class="inline">n</code>.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> What must you do when timing in-place AXPY?</div>
+        <div class="a"><p>Reset <code class="inline">y</code> from the original each run, or αx accumulates across warmups/timings.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Clip in two ops?</div>
+        <div class="a"><p><code class="inline">max(lo, x)</code> then <code class="inline">min(hi, …)</code> — lane-wise, no branches.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a> · <a href="Theory_Branchless_Integer.html">Branchless →</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>

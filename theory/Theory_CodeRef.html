@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Intrinsics Code Reference — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#float"><span class="num">01</span>Float ops</a></li>
+      <li><a href="#reduce"><span class="num">02</span>Reductions</a></li>
+      <li><a href="#mask"><span class="num">03</span>Compare &amp; blend</a></li>
+      <li><a href="#int"><span class="num">04</span>Integer</a></li>
+      <li><a href="#flags"><span class="num">05</span>Compile flags</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Code Ref <span class="brace">{</span> AVX2 ↔ NEON map <span class="brace">}</span></h1>
+      <p class="subtitle">Quick side-by-side pairs. For full explanations of every intrinsic, use the <a href="Theory_Intrinsics_Catalog.html">Intrinsics Catalog</a>. Types: AVX2 <code class="inline">__m256</code> (8×float), NEON <code class="inline">float32x4_t</code> (4×float).</p>
+    </header>
+
+    <section id="float">
+      <div class="section-head"><span class="idx">01</span><h2>Float load / store / arithmetic</h2></div>
+      <table>
+        <tr><th>Operation</th><th>AVX2</th><th>NEON</th></tr>
+        <tr><td>Load unaligned</td><td><code class="inline">_mm256_loadu_ps</code></td><td><code class="inline">vld1q_f32</code></td></tr>
+        <tr><td>Store unaligned</td><td><code class="inline">_mm256_storeu_ps</code></td><td><code class="inline">vst1q_f32</code></td></tr>
+        <tr><td>Add</td><td><code class="inline">_mm256_add_ps</code></td><td><code class="inline">vaddq_f32</code></td></tr>
+        <tr><td>FMA a*b+c</td><td><code class="inline">_mm256_fmadd_ps(a,b,c)</code></td><td><code class="inline">vfmaq_f32(c,a,b)</code></td></tr>
+        <tr><td>Min / max</td><td><code class="inline">_mm256_min_ps</code> / <code class="inline">max_ps</code></td><td><code class="inline">vminq_f32</code> / <code class="inline">vmaxq_f32</code></td></tr>
+        <tr><td>Broadcast</td><td><code class="inline">_mm256_set1_ps</code></td><td><code class="inline">vdupq_n_f32</code></td></tr>
+        <tr><td>Zero</td><td><code class="inline">_mm256_setzero_ps</code></td><td><code class="inline">vdupq_n_f32(0)</code></td></tr>
+        <tr><td>ANDNOT (abs)</td><td><code class="inline">_mm256_andnot_ps</code></td><td><code class="inline">vabsq_f32</code></td></tr>
+      </table>
+    </section>
+
+    <section id="reduce">
+      <div class="section-head"><span class="idx">02</span><h2>Horizontal / shuffle</h2></div>
+      <table>
+        <tr><th>Task</th><th>AVX2</th><th>NEON</th></tr>
+        <tr><td>Extract 128-bit half</td><td><code class="inline">_mm256_extractf128_ps</code></td><td><code class="inline">vget_low/high_f32</code></td></tr>
+        <tr><td>Cast 256→128</td><td><code class="inline">_mm256_castps256_ps128</code></td><td>—</td></tr>
+        <tr><td>Add halves / pairs</td><td><code class="inline">_mm_add_ps</code>, <code class="inline">_mm_hadd_ps</code></td><td><code class="inline">vadd_f32</code>, <code class="inline">vpadd_f32</code></td></tr>
+        <tr><td>Horizontal min</td><td><code class="inline">_mm_min_ps</code> + <code class="inline">shuffle</code></td><td><code class="inline">vmin_f32</code>, <code class="inline">vpmin_f32</code></td></tr>
+        <tr><td>Extract scalar</td><td><code class="inline">_mm_cvtss_f32</code></td><td><code class="inline">vget_lane_f32</code></td></tr>
+      </table>
+    </section>
+
+    <section id="mask">
+      <div class="section-head"><span class="idx">03</span><h2>Compare &amp; blend</h2></div>
+      <table>
+        <tr><th>Task</th><th>AVX2</th><th>NEON</th></tr>
+        <tr><td>Greater than</td><td><code class="inline">_mm256_cmp_ps(…,_CMP_GT_OQ)</code></td><td><code class="inline">vcgtq_f32</code></td></tr>
+        <tr><td>Blend by mask</td><td><code class="inline">_mm256_blendv_ps(f,t,m)</code></td><td><code class="inline">vbslq_f32(m,t,f)</code></td></tr>
+      </table>
+    </section>
+
+    <section id="int">
+      <div class="section-head"><span class="idx">04</span><h2>int32</h2></div>
+      <table>
+        <tr><th>Task</th><th>AVX2</th><th>NEON</th></tr>
+        <tr><td>Load / store</td><td><code class="inline">_mm256_loadu_si256</code> / <code class="inline">storeu_si256</code></td><td><code class="inline">vld1q_s32</code> / <code class="inline">vst1q_s32</code></td></tr>
+        <tr><td>Add</td><td><code class="inline">_mm256_add_epi32</code></td><td><code class="inline">vaddq_s32</code></td></tr>
+      </table>
+    </section>
+
+    <section id="flags">
+      <div class="section-head"><span class="idx">05</span><h2>CMake / compile flags</h2></div>
+      <div class="code-wrap">
+        <div class="code-bar"><span>Build</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-bash">cmake -S . -B build &amp;&amp; cmake --build build
+# x86: -march=native -mfma -O3
+# ARM: -mcpu=native -O3</code></pre>
+      </div>
+      <p>Headers via <code class="inline">simd_detect.hpp</code>. Scalar baseline: <code class="inline">SIMD_SCALAR_NO_VEC</code>.</p>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a> · <a href="Theory_Intrinsics_Catalog.html">Intrinsics catalog →</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>

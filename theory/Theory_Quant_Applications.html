@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quant Applications — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#map"><span class="num">01</span>Exercise map</a></li>
+      <li><a href="#detail"><span class="num">02</span>Per-kernel detail</a></li>
+      <li><a href="#validation"><span class="num">03</span>Batch validation</a></li>
+      <li><a href="#hotpaths"><span class="num">04</span>Numeric hot paths</a></li>
+      <li><a href="#next"><span class="num">05</span>Further kernels</a></li>
+      <li><a href="#checklist"><span class="num">06</span>Revision checklist</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Quant <span class="brace">{</span> where SIMD fits <span class="brace">}</span></h1>
+      <p class="subtitle">Where each exercise maps onto kernels used in backtests, risk, and reconciliation. Layout for hot paths is usually SoA even when wire formats stay packed.</p>
+    </header>
+
+    <section id="map">
+      <div class="section-head"><span class="idx">01</span><h2>Exercise → production kernel</h2></div>
+      <table>
+        <tr><th>Lab</th><th>Kernel</th><th>Quant example</th></tr>
+        <tr><td>01 vecadd</td><td><code class="inline">c[i]=a[i]+b[i]</code></td><td>Combine PnL legs, mid ± spread pieces</td></tr>
+        <tr><td>02 dot</td><td>Σ ab</td><td>weights·returns, correlation numerator, scores</td></tr>
+        <tr><td>03 axpy</td><td><code class="inline">y+=αx</code></td><td>EWMA, gradient / residual accumulation</td></tr>
+        <tr><td>04 clip/min</td><td>clamp, extrema</td><td>Cap returns, worst-in-window</td></tr>
+        <tr><td>05 blend</td><td>masks</td><td>Threshold signals, stop flags</td></tr>
+        <tr><td>06 int32</td><td>int add</td><td>Volume, fill counts</td></tr>
+        <tr><td>07 sum</td><td>reduce</td><td>Mean return, total exposure</td></tr>
+      </table>
+    </section>
+
+    <section id="detail">
+      <div class="section-head"><span class="idx">02</span><h2>Per-kernel detail</h2></div>
+      <h3>01 — Vector add</h3>
+      <p>Any aligned “combine two series.” Portfolio PnL legs, cash + futures delta into total exposure, reconstructing ask = mid + half_spread (with a subtract sibling for bid).</p>
+      <h3>02 — Dot product</h3>
+      <p>Portfolio return Σ w·r; factor model Σ β·f; demeaned series product inside correlation/covariance; similarity of two feature vectors. Production often calls BLAS <code class="inline">sdot</code>; this file is that kernel.</p>
+      <h3>03 — AXPY / FMA</h3>
+      <p>Scaled accumulate. EWMA: <code class="inline">s += α (x - s)</code>. Residual updates and many gradient steps share the shape.</p>
+      <h3>04 — Clip &amp; bounds</h3>
+      <p>Winsorize returns; enforce weight/position caps; report window min/max for risk.</p>
+      <h3>05 — Masks</h3>
+      <p>Turn predicates into 0/1 gates without per-element branching in the hot path. Gate signals or mark validation failures.</p>
+      <h3>06 / 07</h3>
+      <p>Integer tallies (volume) and float reductions (means, totals). Watch float non-associativity on long sums.</p>
+    </section>
+
+    <section id="validation">
+      <div class="section-head"><span class="idx">03</span><h2>Batch validation</h2></div>
+      <p>Regression between two engines or sim vs prod snapshots:</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>validation pattern</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">// diff = abs(a[i] - b[i])
+// mask = diff &gt; tolerance
+// any(mask) → fail batch</code></pre>
+      </div>
+      <p>Combines abs + compare/blend + a horizontal “any.” Natural follow-on: package as a dedicated validate kernel.</p>
+    </section>
+
+    <section id="hotpaths">
+      <div class="section-head"><span class="idx">04</span><h2>Numeric hot paths</h2></div>
+      <ul>
+        <li><strong>Factor / risk</strong> — dots for exposures; BLAS often wins; intrinsics show the ISA underneath.</li>
+        <li><strong>Rolling stats</strong> — AXPY/FMA for EWMA; Welford for stable variance.</li>
+        <li><strong>Surfaces / grids</strong> — same kernels over strikes × expiries once data is SoA.</li>
+      </ul>
+      <div class="card">
+        <span class="card-label">Thread boundary</span>
+        <p>SIMD runs inside one thread over contiguous arrays. Coarser parallelism (per symbol, per batch) can wrap the same kernels.</p>
+      </div>
+    </section>
+
+    <section id="next">
+      <div class="section-head"><span class="idx">05</span><h2>Further kernels (not in v1)</h2></div>
+      <ul>
+        <li><code class="inline">abs_diff_validate</code> — tolerance check two arrays</li>
+        <li><code class="inline">welford_variance</code> — online mean/var</li>
+        <li><code class="inline">deinterleave</code> — AoS tick → SoA price/volume</li>
+        <li><code class="inline">double_accum</code> — sum floats in double SIMD</li>
+      </ul>
+    </section>
+
+    <section id="checklist">
+      <div class="section-head"><span class="idx">06</span><h2>Revision checklist</h2></div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Name three kernels and a quant use for each.</div>
+        <div class="a"><p>e.g. dot → weights·returns; AXPY → EWMA; blend → threshold signal; clip → cap returns; sum → batch mean.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why SoA before these kernels?</div>
+        <div class="a"><p>Contiguous same-field arrays so <code class="inline">loadu</code> grabs a full vector of prices/returns/weights.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>

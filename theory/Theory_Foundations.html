@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIMD Foundations — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#what-is-simd"><span class="num">01</span>What is SIMD?</a></li>
+      <li><a href="#walkthrough"><span class="num">02</span>Scalar vs SIMD walkthrough</a></li>
+      <li><a href="#lanes"><span class="num">03</span>Lanes, vertical, horizontal</a></li>
+      <li><a href="#isa"><span class="num">04</span>ISA facts (AVX2 / NEON)</a></li>
+      <li><a href="#vs-threads"><span class="num">05</span>SIMD vs threads</a></li>
+      <li><a href="#memory"><span class="num">06</span>Memory, cache, bandwidth</a></li>
+      <li><a href="#alignment"><span class="num">07</span>Alignment (why 32 bytes)</a></li>
+      <li><a href="#soa-aos"><span class="num">08</span>SoA vs AoS</a></li>
+      <li><a href="#levels"><span class="num">09</span>Three ways to get SIMD</a></li>
+      <li><a href="#when"><span class="num">10</span>When to use intrinsics</a></li>
+      <li><a href="#lab-map"><span class="num">11</span>How this maps to the lab</a></li>
+      <li><a href="#glossary"><span class="num">12</span>Glossary</a></li>
+      <li><a href="#checklist"><span class="num">13</span>Revision checklist</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Foundations <span class="brace">{</span> SIMD revision notes <span class="brace">}</span></h1>
+      <p class="subtitle">Core ideas behind every exercise: what SIMD is, how lanes work, why layout and bandwidth matter, and when hand intrinsics are worth it. Read this before diving into <code class="inline">src/</code>.</p>
+    </header>
+
+    <section id="what-is-simd">
+      <div class="section-head"><span class="idx">01</span><h2>What is SIMD?</h2></div>
+      <p><strong>S</strong>ingle <strong>I</strong>nstruction, <strong>M</strong>ultiple <strong>D</strong>ata: the CPU applies <em>one</em> operation to <em>several</em> values at once, packed in a wide register.</p>
+      <ul>
+        <li>Happens <strong>inside one thread</strong> on one core (not “use more cores”).</li>
+        <li>Best fit: the <strong>same</strong> math on many independent elements (add, mul, min, compare).</li>
+        <li>Intrinsics (<code class="inline">_mm256_add_ps</code>, <code class="inline">vaddq_f32</code>, …) are C/C++ functions that map nearly 1:1 to those instructions.</li>
+      </ul>
+      <div class="card">
+        <span class="card-label">Mental model</span>
+        <p>A SIMD register is a <strong>tiny fixed-size array in hardware</strong> (e.g. 8 floats). You load a slice of your big array into it, operate on all slots, store back, advance by the lane count, repeat.</p>
+      </div>
+      <p><strong>Not SIMD:</strong> branching business logic, pointer-chasing trees, sparse maps, “do totally different work per element.” Those need different tools (threads, better algorithms, layout changes).</p>
+    </section>
+
+    <section id="walkthrough">
+      <div class="section-head"><span class="idx">02</span><h2>Scalar vs SIMD walkthrough</h2></div>
+      <p>Same job: <code class="inline">out[i] = a[i] + b[i]</code> for <code class="inline">i = 0 … n-1</code>.</p>
+
+      <h3>Scalar (1 float at a time)</h3>
+      <div class="code-wrap">
+        <div class="code-bar"><span>scalar</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">for (size_t i = 0; i &lt; n; ++i)
+    out[i] = a[i] + b[i];   // one add per iteration</code></pre>
+      </div>
+
+      <h3>SIMD idea (N floats at a time)</h3>
+      <div class="code-wrap">
+        <div class="code-bar"><span>SIMD pattern (NEON: N=4)</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">// one iteration processes indices i .. i+3
+load  a[i..i+3] into va
+load  b[i..i+3] into vb
+vr = va + vb          // 4 adds in one instruction
+store vr into out[i..i+3]
+i += 4</code></pre>
+      </div>
+      <p>Then a <strong>remainder</strong> scalar loop finishes <code class="inline">n % N</code> leftover elements. Full pattern: <a href="Theory_Intrinsics.html">Loop patterns</a> and <code class="inline">01_vecadd.cpp</code>.</p>
+      <table>
+        <tr><th></th><th>Scalar</th><th>NEON</th><th>AVX2</th></tr>
+        <tr><td>Elements / iter</td><td>1</td><td>4 floats</td><td>8 floats</td></tr>
+        <tr><td>Ideal arithmetic peak</td><td>1×</td><td>~4×</td><td>~8×</td></tr>
+        <tr><td>Real speedup</td><td>—</td><td colspan="2">Often less than peak when memory-bound; see below</td></tr>
+      </table>
+      <div class="card warn">
+        <span class="card-label">Lab numbers vs theory</span>
+        <p>This repo’s scalar path uses <code class="inline">SIMD_SCALAR_NO_VEC</code> (<code class="inline">optnone</code> / no autovec), so it is <em>intentionally slow</em>. Reported speedups (often ~4–20× on NEON) compare intrinsics to that crippled scalar — useful for ranking kernels, not as “production vs -O3 scalar” claims. A normal <code class="inline">-O3</code> scalar loop may already be partly vectorized and show a smaller gap.</p>
+      </div>
+    </section>
+
+    <section id="lanes">
+      <div class="section-head"><span class="idx">03</span><h2>Lanes, vertical, horizontal</h2></div>
+      <p>A <strong>lane</strong> is one slot in the vector register (one <code class="inline">float</code> or one <code class="inline">int32</code>).</p>
+
+      <h3>Vertical (most of this lab)</h3>
+      <p>Lane <em>i</em> of the result depends only on lane <em>i</em> of the inputs:</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>vertical add</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-text">va:  [a0 a1 a2 a3]
+vb:  [b0 b1 b2 b3]
+vr:  [a0+b0  a1+b1  a2+b2  a3+b3]</code></pre>
+      </div>
+      <p>Examples: vecadd, AXPY body, clip min/max, threshold blend. No communication between lanes.</p>
+
+      <h3>Horizontal (reductions)</h3>
+      <p>Combine lanes <em>inside</em> one register into fewer values (often one scalar):</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>horizontal sum (idea)</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-text">acc: [p0 p1 p2 p3]   // four partial sums
+  →  p0+p1+p2+p3     // one float</code></pre>
+      </div>
+      <p>Needed after dot product and array sum (partials live in lanes), and for array-wide min. Horizontal work runs <strong>once per reduction</strong>; the long vertical loop dominates cost. Details: <a href="Theory_Reductions_FMA.html">Reductions &amp; FMA</a>.</p>
+    </section>
+
+    <section id="isa">
+      <div class="section-head"><span class="idx">04</span><h2>ISA facts used in this lab</h2></div>
+      <table>
+        <tr><th></th><th>AVX2 (x86)</th><th>NEON (ARM / Apple Silicon)</th></tr>
+        <tr><td>Float type</td><td><code class="inline">__m256</code></td><td><code class="inline">float32x4_t</code></td></tr>
+        <tr><td>Float lanes</td><td>8</td><td>4</td></tr>
+        <tr><td>Vector size</td><td>256 bit = <strong>32 bytes</strong></td><td>128 bit = <strong>16 bytes</strong></td></tr>
+        <tr><td>Int32 lanes</td><td>8 (<code class="inline">__m256i</code>)</td><td>4 (<code class="inline">int32x4_t</code>)</td></tr>
+        <tr><td>Header</td><td><code class="inline">&lt;immintrin.h&gt;</code></td><td><code class="inline">&lt;arm_neon.h&gt;</code></td></tr>
+        <tr><td>FMA</td><td><code class="inline">_mm256_fmadd_ps</code> (needs <code class="inline">-mfma</code>)</td><td><code class="inline">vfmaq_f32</code></td></tr>
+        <tr><td>Detect macro</td><td><code class="inline">__AVX2__</code></td><td><code class="inline">__ARM_NEON</code></td></tr>
+      </table>
+      <p>CMake picks native flags; <code class="inline">simd_detect.hpp</code> selects the backend. Out of scope: AVX-512 (512-bit), SVE (scalable vectors).</p>
+      <div class="card warn">
+        <span class="card-label">Don’t confuse lanes with bytes</span>
+        <p>“8 floats” ≠ “8 bytes.” Eight floats × 4 bytes each = <strong>32 bytes</strong> — that is why AVX alignment talk uses 32.</p>
+      </div>
+    </section>
+
+    <section id="vs-threads">
+      <div class="section-head"><span class="idx">05</span><h2>SIMD vs threads</h2></div>
+      <table>
+        <tr><th></th><th>SIMD</th><th>Threads</th></tr>
+        <tr><td>Question answered</td><td>“Same op on many elements?”</td><td>“Independent tasks / cores?”</td></tr>
+        <tr><td>Grain</td><td>Lanes inside one instruction</td><td>Whole functions / shards</td></tr>
+        <tr><td>Shared memory issues</td><td>Usually one buffer, one thread</td><td>Queues, races, sync</td></tr>
+        <tr><td>This repo</td><td>All of it</td><td>None</td></tr>
+      </table>
+      <p>They stack: thread A runs NEON on symbol 1’s arrays; thread B on symbol 2. SIMD does not replace threading; threading does not replace SIMD.</p>
+    </section>
+
+    <section id="memory">
+      <div class="section-head"><span class="idx">06</span><h2>Memory, cache, bandwidth</h2></div>
+      <p>SIMD lowers <em>arithmetic</em> cost per element. Runtime often limited by <strong>how fast you can move bytes</strong> (DRAM → cache → registers).</p>
+
+      <h3>Arithmetic intensity (intuition)</h3>
+      <table>
+        <tr><th>Kernel</th><th>Traffic (rough)</th><th>Compute</th><th>Often</th></tr>
+        <tr><td>vecadd</td><td>2 reads + 1 write ≈ 12 B / float</td><td>1 add</td><td>Memory-bound</td></tr>
+        <tr><td>dot</td><td>2 reads, 1 scalar write</td><td>mul + add (FMA) per element</td><td>More compute-friendly</td></tr>
+        <tr><td>threshold + blend</td><td>1 read + 1 write</td><td>cmp + blend</td><td>Can beat branchy scalar a lot</td></tr>
+      </table>
+      <p><strong>Roofline idea:</strong> if you make the math 8× cheaper but still wait on RAM, wall time barely moves. Measure (<a href="Theory_Benchmarking.html">Benchmarking</a>) before blaming the ISA. Remember this lab’s scalar is <code class="inline">optnone</code> — large speedups can coexist with a memory-bound story vs a fair <code class="inline">-O3</code> baseline.</p>
+      <h3>Why contiguous SoA arrays matter</h3>
+      <p><code class="inline">loadu</code> wants <code class="inline">a[i], a[i+1], …</code> adjacent in memory. That matches <code class="inline">std::vector&lt;float&gt;</code> / raw arrays. Linked lists and pointer tables defeat simple SIMD.</p>
+    </section>
+
+    <section id="alignment">
+      <div class="section-head"><span class="idx">07</span><h2>Alignment (why 32 bytes)</h2></div>
+      <ul>
+        <li><code class="inline">std::vector&lt;float&gt;</code> guarantees alignment suitable for <code class="inline">float</code> (usually 4 bytes), and <strong>contiguous</strong> storage.</li>
+        <li>It does <strong>not</strong> guarantee 32-byte alignment for AVX <code class="inline">_mm256_load_ps</code> (aligned load).</li>
+        <li>This lab uses <code class="inline">loadu</code> / <code class="inline">storeu</code> (unaligned-safe) everywhere in kernels.</li>
+        <li><code class="inline">AlignedFloatBuffer</code> allocates 32-byte-aligned storage if you want to try aligned loads later. 32 = AVX float vector width; also divisible by NEON’s 16.</li>
+      </ul>
+      <p><code class="inline">a.data()</code> is a <code class="inline">float*</code> to that contiguous block — what kernels take — not a pointer to the <code class="inline">vector</code> object itself.</p>
+    </section>
+
+    <section id="soa-aos">
+      <div class="section-head"><span class="idx">08</span><h2>SoA vs AoS</h2></div>
+      <p><strong>AoS</strong> (array of structures) — natural for messages / ticks:</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>AoS</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">struct Tick { float price; int volume; };
+Tick ticks[N];
+// memory: price, volume, price, volume, ...</code></pre>
+      </div>
+      <p>To SIMD on prices only you need gather or unpack. Simple <code class="inline">loadu_ps</code> will pull mixed fields.</p>
+      <p><strong>SoA</strong> (structure of arrays) — natural for hot numeric loops:</p>
+      <div class="code-wrap">
+        <div class="code-bar"><span>SoA</span><button class="copy-btn" onclick="copyCode(this)">copy</button></div>
+        <pre><code class="language-cpp">float prices[N];
+int   volumes[N];
+// one loadu → 4 or 8 contiguous prices</code></pre>
+      </div>
+      <div class="card">
+        <span class="card-label">Revision rule</span>
+        <p>You do <strong>not</strong> need the whole program in SoA. Keep wire/storage compact if you want; <strong>denormalize into SoA buffers</strong> for the hot path. Hand intrinsics in this lab assume that layout.</p>
+      </div>
+    </section>
+
+    <section id="levels">
+      <div class="section-head"><span class="idx">09</span><h2>Three ways to get SIMD</h2></div>
+      <table>
+        <tr><th>Level</th><th>You write</th><th>Who emits SIMD</th><th>Notes</th></tr>
+        <tr><td>1. Auto-vectorize</td><td>Ordinary loop + <code class="inline">-O3 -march=native</code></td><td>Compiler</td><td>Often enough for simple loops</td></tr>
+        <tr><td>2. Libraries</td><td>BLAS / Eigen <code class="inline">dot</code>, <code class="inline">axpy</code></td><td>Library</td><td>Usual production choice</td></tr>
+        <tr><td>3. Hand intrinsics</td><td><code class="inline">_mm256_*</code> / NEON</td><td>You</td><td>This lab</td></tr>
+      </table>
+      <p><strong>SIMD</strong> = the hardware capability. <strong>Hand intrinsics</strong> = one way to request it. All three can produce SIMD code.</p>
+      <p>This lab forces scalar with <code class="inline">SIMD_SCALAR_NO_VEC</code> so “Scalar vs SIMD” means true scalar vs your intrinsics — not vs an already-vectorized compiler loop.</p>
+    </section>
+
+    <section id="when">
+      <div class="section-head"><span class="idx">10</span><h2>When to use hand intrinsics</h2></div>
+      <table>
+        <tr><th>Use hand intrinsics when…</th><th>Prefer compiler / library when…</th></tr>
+        <tr><td>Hot loop is simple and measurable</td><td>Eigen / BLAS / autovec already fast enough</td></tr>
+        <tr><td>You need explicit masks (blend)</td><td>Logic is branchy and cold</td></tr>
+        <tr><td>SoA layout is under your control</td><td>Data is sparse / pointer-chasing</td></tr>
+        <tr><td>Diagnosing why autovec failed</td><td>You must ship one binary to unknown ISAs</td></tr>
+      </table>
+      <p>Default production path: clean SoA loops or a library → measure → intrinsics only if there is a real gap.</p>
+    </section>
+
+    <section id="lab-map">
+      <div class="section-head"><span class="idx">11</span><h2>How this maps to the lab</h2></div>
+      <table>
+        <tr><th>Foundation idea</th><th>Where you see it</th></tr>
+        <tr><td>Vertical load/add/store</td><td><code class="inline">01_vecadd</code></td></tr>
+        <tr><td>FMA + horizontal fold</td><td><code class="inline">02_dot_product</code>, <code class="inline">07_reduce_sum</code></td></tr>
+        <tr><td>Broadcast + in-place FMA</td><td><code class="inline">03_fma_scale</code></td></tr>
+        <tr><td>Lane min/max; horizontal min</td><td><code class="inline">04_min_max</code></td></tr>
+        <tr><td>Mask = data, not a branch</td><td><code class="inline">05_blend_branchless</code></td></tr>
+        <tr><td>Integer lanes</td><td><code class="inline">06_int32_add</code></td></tr>
+        <tr><td>Fair timing + verify</td><td><code class="inline">bench_common.hpp</code></td></tr>
+        <tr><td>ISA detect</td><td><code class="inline">simd_detect.hpp</code></td></tr>
+      </table>
+      <p>Next reads: <a href="Theory_Intrinsics.html">Loop patterns</a> → code <code class="inline">01</code>… → <a href="Theory_Intrinsics_Catalog.html">Intrinsics catalog</a> as a dictionary.</p>
+    </section>
+
+    <section id="glossary">
+      <div class="section-head"><span class="idx">12</span><h2>Glossary (revision)</h2></div>
+      <table>
+        <tr><th>Term</th><th>Meaning</th></tr>
+        <tr><td>Lane</td><td>One element slot in a SIMD register</td></tr>
+        <tr><td>Vertical op</td><td>Same op independently per lane</td></tr>
+        <tr><td>Horizontal op</td><td>Combine lanes within one register</td></tr>
+        <tr><td>Intrinsic</td><td>C/C++ API for one SIMD instruction (or short sequence)</td></tr>
+        <tr><td>FMA</td><td>Fused multiply-add: <code class="inline">a*b+c</code>, one rounding</td></tr>
+        <tr><td>Mask</td><td>Per-lane true/false bits from a compare</td></tr>
+        <tr><td>Blend / BSL</td><td>Pick lane from A or B using a mask (no <code class="inline">if</code>)</td></tr>
+        <tr><td>Remainder / tail</td><td>Scalar loop for <code class="inline">n % step</code> leftovers</td></tr>
+        <tr><td>SoA / AoS</td><td>Structure of arrays vs array of structures</td></tr>
+        <tr><td>loadu / storeu</td><td>Unaligned vector load/store</td></tr>
+        <tr><td>Arithmetic intensity</td><td>Ops per byte moved — low ⇒ often memory-bound</td></tr>
+      </table>
+    </section>
+
+    <section id="checklist">
+      <div class="section-head"><span class="idx">13</span><h2>Revision checklist</h2></div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> SIMD vs threads — one sentence?</div>
+        <div class="a"><p>SIMD: many elements, one instruction, one thread. Threads: many tasks/cores. Compose them; don’t confuse them.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why isn’t speedup always equal to lane count?</div>
+        <div class="a"><p>Memory bandwidth, latency, remainder scalar work, and horizontal folds. Vecadd is a classic bandwidth case.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why SoA for this lab’s intrinsics?</div>
+        <div class="a"><p><code class="inline">loadu</code> needs contiguous same-type elements. AoS interleaves fields; you’d need gather or unpack first.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Hand intrinsics vs “using SIMD”?</div>
+        <div class="a"><p>Intrinsics are one way to get SIMD. Compiler autovec and BLAS also use SIMD without you writing <code class="inline">_mm256_*</code>.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why 32 in aligned alloc?</div>
+        <div class="a"><p>AVX float vector is 32 bytes wide; aligned AVX loads want addresses divisible by 32. (NEON’s natural width is 16.)</p></div>
+      </div>
+      <div class="pitfall">
+        <span class="icon">✕</span>
+        <div><h4>Skipping the remainder loop</h4><p>Wrong tail or OOB when <code class="inline">n % step != 0</code>. Lab size <code class="inline">10'000'007</code> forces a tail.</p></div>
+      </div>
+      <div class="pitfall">
+        <span class="icon">✕</span>
+        <div><h4>Expecting bit-identical reductions</h4><p>Dot/sum reorder float adds → small relative error vs scalar is normal. Element-wise kernels should match tightly.</p></div>
+      </div>
+      <div class="pitfall">
+        <span class="icon">✕</span>
+        <div><h4>Passing <code class="inline">&amp;vector</code> into a float kernel</h4><p>Kernels want <code class="inline">float*</code> → use <code class="inline">v.data()</code>, not the address of the <code class="inline">vector</code> object.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a> · <a href="Theory_Intrinsics.html">Next: Loop patterns →</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>

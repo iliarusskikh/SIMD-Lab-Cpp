@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Theory Notes — SIMD Lab C++</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+</head>
+<body>
+<div class="layout" style="grid-template-columns: minmax(0, 780px);">
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Theory <span class="brace">{</span> Concepts behind the code <span class="brace">}</span></h1>
+      <p class="subtitle">Notes on SIMD, intrinsics, reductions, branchless masks, and benchmarking as used in this repository. Open the sources under <code class="inline">src/</code> while you read.</p>
+    </header>
+
+    <section>
+      <div class="section-head"><span class="idx">01</span><h2>Reading order</h2></div>
+      <p class="dim">Dependency order. Each note points at concrete files under <code class="inline">src/</code> and <code class="inline">include/</code>.</p>
+      <ol class="index-list">
+        <li>
+          <a href="Theory_Foundations.html">
+            <span class="order">foundation</span>
+            <div class="name">SIMD Foundations</div>
+            <p class="desc">Full revision note: lanes, bandwidth, SoA, ISA facts, glossary, Q&amp;A checklist.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_Intrinsics.html">
+            <span class="order">intrinsics</span>
+            <div class="name">Intrinsics &amp; Loop Patterns</div>
+            <p class="desc">Detect, load/compute/store, remainder, alignment, pitfalls, revision Q&amp;A.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_Reductions_FMA.html">
+            <span class="order">numeric</span>
+            <div class="name">Reductions &amp; FMA</div>
+            <p class="desc">Dot product, horizontal fold, fused multiply-add, AXPY, float non-associativity, clip and sum.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_Branchless_Integer.html">
+            <span class="order">control</span>
+            <div class="name">Branchless &amp; Integer SIMD</div>
+            <p class="desc">Why masks beat data-dependent branches; compare, blend, abs; int32 add and overflow.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_Benchmarking.html">
+            <span class="order">method</span>
+            <div class="name">Benchmarking &amp; Correctness</div>
+            <p class="desc">Warmup, median, <code class="inline">steady_clock</code>, fair scalar baselines, verify helpers.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_Quant_Applications.html">
+            <span class="order">quant</span>
+            <div class="name">Quant Applications</div>
+            <p class="desc">Exercise → kernel map, validation patterns, hot paths, follow-on ideas.</p>
+          </a>
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="idx">02</span><h2>Exercises ↔ source</h2></div>
+      <table>
+        <tr><th>Exercise</th><th>Source</th><th>Core idea</th></tr>
+        <tr><td>01</td><td><code class="inline">src/01_vecadd.cpp</code></td><td>load / add / store</td></tr>
+        <tr><td>02</td><td><code class="inline">src/02_dot_product.cpp</code></td><td>FMA + horizontal reduce</td></tr>
+        <tr><td>03</td><td><code class="inline">src/03_fma_scale.cpp</code></td><td>AXPY in-place</td></tr>
+        <tr><td>04</td><td><code class="inline">src/04_min_max.cpp</code></td><td>clip + array min</td></tr>
+        <tr><td>05</td><td><code class="inline">src/05_blend_branchless.cpp</code></td><td>masks, abs</td></tr>
+        <tr><td>06</td><td><code class="inline">src/06_int32_add.cpp</code></td><td>integer lanes</td></tr>
+        <tr><td>07</td><td><code class="inline">src/07_reduce_sum.cpp</code></td><td>sum reduction</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="idx">03</span><h2>Intrinsics reference</h2></div>
+      <ol class="index-list">
+        <li>
+          <a href="Theory_Intrinsics_Catalog.html">
+            <span class="order">catalog</span>
+            <div class="name">Intrinsics Catalog</div>
+            <p class="desc">Every AVX2/NEON intrinsic used in this repo — meaning, lanes, argument-order traps, and which exercise calls it.</p>
+          </a>
+        </li>
+        <li>
+          <a href="Theory_CodeRef.html">
+            <span class="order">quick map</span>
+            <div class="name">Code Ref (AVX2 ↔ NEON)</div>
+            <p class="desc">Side-by-side lookup table for the same set of intrinsics.</p>
+          </a>
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <div class="section-head"><span class="idx">04</span><h2>Not covered here</h2></div>
+      <p class="dim">AVX-512, SVE, multithreading, Eigen/BLAS wrappers, gather/scatter, and AoS↔SoA conversion are out of scope for this lab.</p>
+    </section>
+
+    <footer>
+      <a href="../PLAN.md">PLAN.md</a> · <a href="../README.md">README.md</a>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

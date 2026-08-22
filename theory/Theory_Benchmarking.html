@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Benchmarking &amp; Correctness — Project Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="theory.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <a class="back" href="index.html">← Theory index</a>
+    <span class="toc-label">Contents</span>
+    <ol id="toc-list">
+      <li><a href="#harness"><span class="num">01</span>bench_common.hpp</a></li>
+      <li><a href="#warmup"><span class="num">02</span>Warmup &amp; median</a></li>
+      <li><a href="#clock"><span class="num">03</span>steady_clock</a></li>
+      <li><a href="#baseline"><span class="num">04</span>Fair scalar baseline</a></li>
+      <li><a href="#verify"><span class="num">05</span>Correctness first</a></li>
+      <li><a href="#interpret"><span class="num">06</span>Interpreting speedup</a></li>
+      <li><a href="#checklist"><span class="num">07</span>Revision checklist</a></li>
+    </ol>
+  </nav>
+  <main>
+    <header class="hero">
+      <span class="eyebrow">SIMD Lab C++ · Knowledge notes</span>
+      <h1 class="title">Benchmarking <span class="brace">{</span> honest numbers <span class="brace">}</span></h1>
+      <p class="subtitle"><code class="inline">bench_common.hpp</code>: warmup, median timing with <code class="inline">steady_clock</code>, and full-array verify before trusting speedup.</p>
+    </header>
+
+    <section id="harness">
+      <div class="section-head"><span class="idx">01</span><h2>Shared harness</h2></div>
+      <ul>
+        <li><code class="inline">time_microseconds(fn)</code> — warmup, then timed runs; returns median/min/max µs. <code class="inline">Fn&&</code> is a forwarding reference (accepts temporary lambdas).</li>
+        <li><code class="inline">verify_float_ranges</code> — absolute tolerance per element (vecadd, axpy, …).</li>
+        <li><code class="inline">verify_float_exact</code> / <code class="inline">verify_int32_exact</code> — bit/integer identity.</li>
+        <li><code class="inline">verify_scalar_close</code> — relative tolerance for reductions (dot, sum).</li>
+        <li><code class="inline">kDefaultSize = 10'000'007</code> — large work unit; not a multiple of 4/8 so the remainder loop runs.</li>
+      </ul>
+      <p>Speedup printed as <code class="inline">baseline_us / fast_us</code> (e.g. Scalar / SIMD).</p>
+    </section>
+
+    <section id="warmup">
+      <div class="section-head"><span class="idx">02</span><h2>Warmup &amp; median</h2></div>
+      <p>Default: <strong>3 warmup</strong> (not timed) + <strong>10 timed</strong> iterations. Each <code class="inline">fn()</code> already processes ~10M elements — few outer repeats, large inner work. Median after sort resists one noisy sample better than a single timing or a mean.</p>
+      <div class="card warn">
+        <span class="card-label">Not production profiling</span>
+        <p>For serious work use <code class="inline">perf</code>, Instruments, or Google Benchmark with pinned CPU frequency. This lab uses chrono for a small self-contained harness.</p>
+      </div>
+    </section>
+
+    <section id="clock">
+      <div class="section-head"><span class="idx">03</span><h2><code class="inline">steady_clock</code></h2></div>
+      <p>Elapsed intervals need a <strong>monotonic</strong> clock. <code class="inline">system_clock</code> can jump (NTP). <code class="inline">high_resolution_clock</code> is not required to be steady (on Apple libc++ it aliases <code class="inline">steady_clock</code>). The harness uses <code class="inline">std::chrono::steady_clock</code> and converts <code class="inline">(t1-t0)</code> with <code class="inline">duration&lt;double, micro&gt;</code>.</p>
+    </section>
+
+    <section id="baseline">
+      <div class="section-head"><span class="idx">04</span><h2>Fair scalar baseline</h2></div>
+      <p>At <code class="inline">-O3</code> with native ISA flags the compiler auto-vectorizes simple loops. Scalar functions use <code class="inline">SIMD_SCALAR_NO_VEC</code> so speedup compares hand intrinsics vs true scalar — not vs compiler-SIMD.</p>
+    </section>
+
+    <section id="verify">
+      <div class="section-head"><span class="idx">05</span><h2>Correctness first</h2></div>
+      <p>A fast wrong kernel is useless. Pattern:</p>
+      <ol class="plain">
+        <li>Scalar reference → <code class="inline">expected</code> (untimed).</li>
+        <li>Time scalar and SIMD (often writing into <code class="inline">result</code>; SIMD overwrites last).</li>
+        <li>Compare full arrays / scalars with an appropriate checker.</li>
+        <li>Exit code 1 on failure — CTest.</li>
+      </ol>
+      <p>For in-place AXPY, reset from <code class="inline">y_orig</code> every run; verify one clean shot so timing mutations do not confuse the check. Reductions: SIMD may differ slightly from scalar without a logic bug — use relative tolerance.</p>
+    </section>
+
+    <section id="interpret">
+      <div class="section-head"><span class="idx">06</span><h2>Interpreting speedup</h2></div>
+      <table>
+        <tr><th>Exercise</th><th>Typical story</th><th>Why</th></tr>
+        <tr><td>vecadd</td><td>Often memory-bound vs fair <code class="inline">-O3</code> scalar</td><td>High bytes / op</td></tr>
+        <tr><td>dot / sum</td><td>More room for SIMD</td><td>More compute per load</td></tr>
+        <tr><td>branchless / clip</td><td>Can look huge in this lab</td><td>Scalar <code class="inline">optnone</code> + branch cost vs tight NEON</td></tr>
+      </table>
+      <div class="card warn">
+        <span class="card-label">Read README results carefully</span>
+        <p>Sample NEON speedups in the README (e.g. ~9× vecadd, ~20× threshold) use the lab’s disabled-autovec scalar. They show the intrinsic path is fast and correctness passes — not that you will get the same ratio against production <code class="inline">-O3</code> scalar or BLAS.</p>
+      </div>
+      <p class="dim">Numbers depend on CPU, power state, and background load. Treat speedups as relative on a given machine.</p>
+    </section>
+
+    <section id="checklist">
+      <div class="section-head"><span class="idx">07</span><h2>Revision checklist</h2></div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why <code class="inline">steady_clock</code>?</div>
+        <div class="a"><p>Monotonic — safe for elapsed Δt. <code class="inline">system_clock</code> can jump; <code class="inline">high_resolution_clock</code> is not required to be steady.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Absolute vs relative verify?</div>
+        <div class="a"><p>Element-wise kernels: absolute / exact. Reductions (dot, sum): relative — float add order differs.</p></div>
+      </div>
+      <div class="qa">
+        <div class="q"><span class="tag">Q</span> Why median of 10, not one timing?</div>
+        <div class="a"><p>Caches, turbo, OS noise. Warmup first; median resists a single spike.</p></div>
+      </div>
+    </section>
+
+    <footer>
+      <a href="index.html">← Theory index</a>
+    </footer>
+  </main>
+</div>
+<script src="theory.js"></script>
+</body>
+</html>
